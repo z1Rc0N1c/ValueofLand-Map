@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>Vworld 기반 토지/공시지가 지도</title>
+    <!-- OpenLayers CSS 및 JS (Vworld 공식 지원 라이브러리) -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/openlayers/openlayers.github.io@master/en/v6.15.1/css/ol.css" type="text/css">
+    <script src="https://cdn.jsdelivr.net/gh/openlayers/openlayers.github.io@master/en/v6.15.1/build/ol.js"></script>
+    <style>
+        html, body { width: 100%; height: 100%; margin: 0; padding: 0; font-family: sans-serif; }
+        #map { width: 100%; height: 100vh; }
+
+        /* 팝업 스타일 */
+        .ol-popup {
+            position: absolute;
+            background-color: white;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.2);
+            padding: 12px;
+            border-radius: 8px;
+            border: 1px solid #cccccc;
+            bottom: 12px;
+            left: -50px;
+            min-width: 200px;
+            font-size: 13px;
+            line-height: 1.6;
+        }
+        .ol-popup-closer {
+            text-decoration: none;
+            position: absolute;
+            top: 2px;
+            right: 8px;
+            color: #888;
+        }
+        .popup-title { font-weight: bold; border-bottom: 1px solid #eee; padding-bottom: 4px; margin-bottom: 6px; }
+    </style>
+</head>
+<body>
+
+<div id="map"></div>
+
+<!-- 팝업 오버레이 엘리먼트 -->
+<div id="popup" class="ol-popup">
+    <a href="#" id="popup-closer" class="ol-popup-closer">✖</a>
+    <div id="popup-content"></div>
+</div>
+
+<script>
+    var VWORLD_KEY = " E68BA222-5944-4C0D-9434-C93BD7DF0FFE\n"; // 여기에 Vworld 인증키 입력
+
+    // 1. 기본 배경 지도 (Vworld Base Map)
+    var baseLayer = new ol.layer.Tile({
+        source: new ol.source.XYZ({
+            url: `https://api.vworld.kr/req/wmts/1.0.0/${VWORLD_KEY}/Base/{z}/{y}/{x}.png`
+        })
+    });
+
+    // 2. 연속지적도 레이어 (토지 필지 경계선)
+    var landCadastralLayer = new ol.layer.Tile({
+        source: new ol.source.XYZ({
+            url: `https://api.vworld.kr/req/wmts/1.0.0/${VWORLD_KEY}/lp_pa_cbnd/{z}/{y}/{x}.png`
+        })
+    });
+
+    // 팝업 설정
+    var container = document.getElementById('popup');
+    var content = document.getElementById('popup-content');
+    var closer = document.getElementById('popup-closer');
+
+    var overlay = new ol.Overlay({
+        element: container,
+        autoPan: true,
+        autoPanAnimation: { duration: 250 }
+    });
+
+    closer.onclick = function() {
+        overlay.setPosition(undefined);
+        closer.blur();
+        return false;
+    };
+
+    // 3. 지도 객체 생성 (서울 동대문구 청량리동 좌표: 경도 127.0435, 위도 37.5855)
+    var map = new ol.Map({
+        target: 'map',
+        layers: [baseLayer, landCadastralLayer], // 지적도 레이어 함께 표시
+        overlays: [overlay],
+        view: new ol.View({
+            center: ol.proj.fromLonLat([127.0435, 37.5855]),
+            zoom: 17
+        })
+    });
+
+    // 4. 노드(마커) 레이어 준비
+    var vectorSource = new ol.source.Vector();
+    var vectorLayer = new ol.layer.Vector({
+        source: vectorSource
+    });
+    map.addLayer(vectorLayer);
+
+    // 5. JSON 데이터 불러와서 마커 표시
+    fetch('land_data_vworld.json')
+        .then(res => res.json())
+        .then(data => {
+            data.forEach(item => {
+                if (item.lat && item.lng) {
+                    // WGS84 위경도를 OpenLayers 좌표계(EPSG:3857)로 변환
+                    var coord = ol.proj.fromLonLat([item.lng, item.lat]);
+
+                    var feature = new ol.Feature({
+                        geometry: new ol.geom.Point(coord),
+                        info: item
+                    });
+
+                    // 마커 스타일 설정 (빨간색 동그라미 노드)
+                    feature.setStyle(new ol.style.Style({
+                        image: new ol.style.Circle({
+                            radius: 6,
+                            fill: new ol.style.Fill({ color: '#E74C3C' }),
+                            stroke: new ol.style.Stroke({ color: '#FFFFFF', width: 2 })
+                        })
+                    }));
+
+                    vectorSource.addFeature(feature);
+                }
+            });
+        });
+
+    // 6. 마커 클릭 이벤트 설정
+    map.on('singleclick', function(evt) {
+        var feature = map.forEachFeatureAtPixel(evt.pixel, function(feat) { return feat; });
+
+        if (feature) {
+            var item = feature.get('info');
+            var coord = evt.coordinate;
+
+            var formatNum = num => num ? Number(num).toLocaleString() : '-';
+
+            content.innerHTML = `
+                <div class="popup-title">📍 ${item.법정동} ${item.지번}</div>
+                <b>소유구분:</b> ${item.소유주 || '정보없음'}<br>
+                <b>면적:</b> ${formatNum(item.면적)} ㎡<br>
+                <b>공시지가:</b> ${formatNum(item.공시지가)} 원/㎡<br>
+                <b>총 토지가액:</b> ${formatNum(item.지가)} 원
+            `;
+            overlay.setPosition(coord);
+        } else {
+            overlay.setPosition(undefined);
+        }
+    });
+</script>
+
+</body>
+</html>
