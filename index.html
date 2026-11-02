@@ -81,7 +81,7 @@
 
     // 모바일 감지 및 마커 크기 설정
     var isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || window.innerWidth <= 768;
-    var markerRadius = isMobile ? 11 : 6;
+    var markerRadius = isMobile ? 8 : 6;
 
     // 1. Vworld 기본 배경지도 (가장 안정적인 WMTS 타일 주소)
     var baseLayer = new ol.layer.Tile({
