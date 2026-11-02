@@ -2,60 +2,96 @@
 <html lang="ko">
 <head>
     <meta charset="UTF-8">
-    <title>Vworld 기반 토지/공시지가 지도</title>
-    <!-- OpenLayers CSS 및 JS (Vworld 공식 지원 라이브러리) -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Vworld 토지 소유 및 공시지가 지도</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/openlayers/openlayers.github.io@master/en/v6.15.1/css/ol.css" type="text/css">
     <script src="https://cdn.jsdelivr.net/gh/openlayers/openlayers.github.io@master/en/v6.15.1/build/ol.js"></script>
     <style>
-        html, body { width: 100%; height: 100%; margin: 0; padding: 0; font-family: sans-serif; }
+        html, body { width: 100%; height: 100%; margin: 0; padding: 0; font-family: sans-serif; overflow: hidden; }
         #map { width: 100%; height: 100vh; }
 
-        /* 팝업 스타일 */
+        /* 팝업 스타일 (모바일 터치 최적화) */
         .ol-popup {
             position: absolute;
             background-color: white;
-            box-shadow: 0 1px 4px rgba(0,0,0,0.2);
-            padding: 12px;
-            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.3);
+            padding: 14px;
+            border-radius: 10px;
             border: 1px solid #cccccc;
-            bottom: 12px;
+            bottom: 15px;
             left: -50px;
-            min-width: 200px;
-            font-size: 13px;
+            min-width: 220px;
+            font-size: 14px;
             line-height: 1.6;
         }
         .ol-popup-closer {
             text-decoration: none;
             position: absolute;
-            top: 2px;
-            right: 8px;
+            top: 6px;
+            right: 12px;
             color: #888;
+            font-size: 16px;
+            padding: 4px;
         }
-        .popup-title { font-weight: bold; border-bottom: 1px solid #eee; padding-bottom: 4px; margin-bottom: 6px; }
+        .popup-title { font-weight: bold; border-bottom: 1px solid #eee; padding-bottom: 6px; margin-bottom: 8px; font-size: 15px; }
+
+        /* 소유구분 범례(Legend) 스타일 */
+        .legend-box {
+            position: absolute;
+            top: 12px;
+            right: 12px;
+            background: rgba(255, 255, 255, 0.92);
+            padding: 8px 12px;
+            border-radius: 8px;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.2);
+            font-size: 12px;
+            z-index: 1000;
+            line-height: 1.8;
+        }
+        .legend-title { font-weight: bold; margin-bottom: 2px; border-bottom: 1px solid #ddd; padding-bottom: 2px; }
+        .legend-item { display: flex; align-items: center; }
+        .color-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; margin-right: 6px; border: 1px solid #fff; }
+
+        @media (max-width: 768px) {
+            .legend-box { font-size: 11px; padding: 6px 10px; }
+            .color-dot { width: 8px; height: 8px; }
+        }
     </style>
 </head>
 <body>
 
 <div id="map"></div>
 
-<!-- 팝업 오버레이 엘리먼트 -->
+<!-- 소유구분 범례 -->
+<div class="legend-box">
+    <div class="legend-title">소유구분</div>
+    <div class="legend-item"><span class="color-dot" style="background-color: #E74C3C;"></span>개인</div>
+    <div class="legend-item"><span class="color-dot" style="background-color: #27AE60;"></span>법인 · 종교시설</div>
+    <div class="legend-item"><span class="color-dot" style="background-color: #2980B9;"></span>국 · 도 · 시유지</div>
+</div>
+
 <div id="popup" class="ol-popup">
     <a href="#" id="popup-closer" class="ol-popup-closer">✖</a>
     <div id="popup-content"></div>
 </div>
 
 <script>
-    var VWORLD_KEY = " E68BA222-5944-4C0D-9434-C93BD7DF0FFE\n"; // 여기에 Vworld 인증키 입력
+    var VWORLD_KEY = "발급받은_VWORLD_API_KEY"; // Vworld 인증키
 
-    // 1. 기본 배경 지도 (Vworld Base Map)
+    // 모바일 기기 여부 감지
+    var isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || window.innerWidth <= 768;
+
+    // 기기별 마커 반지름 설정 (모바일은 12px, PC는 6px)
+    var markerRadius = isMobile ? 12 : 6;
+
+    // 1. 배경지도
     var baseLayer = new ol.layer.Tile({
         source: new ol.source.XYZ({
             url: `https://api.vworld.kr/req/wmts/1.0.0/${VWORLD_KEY}/Base/{z}/{y}/{x}.png`
         })
     });
 
-    // 2. 연속지적도 레이어 (토지 필지 경계선)
-    // 연속지적도 (필지 경계선) WMS 설정
+    // 2. 연속지적도 (WMS)
     var landCadastralLayer = new ol.layer.Tile({
         source: new ol.source.TileWMS({
             url: 'https://api.vworld.kr/req/wms',
@@ -69,14 +105,12 @@
                 'KEY': VWORLD_KEY,
                 'FORMAT': 'image/png',
                 'TRANSPARENT': 'TRUE',
-                'EXCEPTIONS': 'blank'  // 에러 발생 시 XML 대신 빈 이미지를 반환하여 ORB 에러 방지
+                'EXCEPTIONS': 'blank'
             },
-            serverType: 'geoserver',
-            crossOrigin: 'anonymous'   // CORS 및 ORB 처리용
+            serverType: 'geoserver'
         })
     });
 
-    // 팝업 설정
     var container = document.getElementById('popup');
     var content = document.getElementById('popup-content');
     var closer = document.getElementById('popup-closer');
@@ -93,10 +127,9 @@
         return false;
     };
 
-    // 3. 지도 객체 생성 (서울 동대문구 청량리동 좌표: 경도 127.0435, 위도 37.5855)
     var map = new ol.Map({
         target: 'map',
-        layers: [baseLayer, landCadastralLayer], // 지적도 레이어 함께 표시
+        layers: [baseLayer, landCadastralLayer],
         overlays: [overlay],
         view: new ol.View({
             center: ol.proj.fromLonLat([127.0435, 37.5855]),
@@ -104,32 +137,41 @@
         })
     });
 
-    // 4. 노드(마커) 레이어 준비
     var vectorSource = new ol.source.Vector();
-    var vectorLayer = new ol.layer.Vector({
-        source: vectorSource
-    });
+    var vectorLayer = new ol.layer.Vector({ source: vectorSource });
     map.addLayer(vectorLayer);
 
-    // 5. JSON 데이터 불러와서 마커 표시
+    // 소유구분 색상 추출 함수
+    function getMarkerColor(ownerType) {
+        if (!ownerType) return '#E74C3C';
+        var owner = String(ownerType).trim();
+
+        if (owner.includes('국') || owner.includes('도') || owner.includes('시') || owner.includes('군') || owner.includes('구') || owner.includes('국유지') || owner.includes('시유지')) {
+            return '#2980B9'; // 파란색 (공공)
+        }
+        if (owner.includes('법인') || owner.includes('종교') || owner.includes('교회') || owner.includes('사찰') || owner.includes('주식회사') || owner.includes('(주)')) {
+            return '#27AE60'; // 초록색 (법인)
+        }
+        return '#E74C3C'; // 빨간색 (개인)
+    }
+
     fetch('land_data_vworld.json')
         .then(res => res.json())
         .then(data => {
             data.forEach(item => {
                 if (item.lat && item.lng) {
-                    // WGS84 위경도를 OpenLayers 좌표계(EPSG:3857)로 변환
                     var coord = ol.proj.fromLonLat([item.lng, item.lat]);
-
                     var feature = new ol.Feature({
                         geometry: new ol.geom.Point(coord),
                         info: item
                     });
 
-                    // 마커 스타일 설정 (빨간색 동그라미 노드)
+                    var markerColor = getMarkerColor(item.소유주);
+
                     feature.setStyle(new ol.style.Style({
                         image: new ol.style.Circle({
-                            radius: 6,
-                            fill: new ol.style.Fill({ color: '#E74C3C' }),
+                            radius: markerRadius, // 모바일일 때 마커 크기 자동 확산
+                            fill: new ol.style.Fill({ color: markerColor }),
                             stroke: new ol.style.Stroke({ color: '#FFFFFF', width: 2 })
                         })
                     }));
@@ -139,20 +181,30 @@
             });
         });
 
-    // 6. 마커 클릭 이벤트 설정
+    // 마커 클릭/터치 이벤트 (hitTolerance 추가로 터치 범위 확장)
     map.on('singleclick', function(evt) {
-        var feature = map.forEachFeatureAtPixel(evt.pixel, function(feat) { return feat; });
+        // 모바일일 때는 10px, PC일 때는 5px 이내 터치도 허용
+        var tolerance = isMobile ? 10 : 5;
+
+        var feature = map.forEachFeatureAtPixel(evt.pixel, function(feat) {
+            return feat;
+        }, { hitTolerance: tolerance });
 
         if (feature) {
             var item = feature.get('info');
             var coord = evt.coordinate;
 
-            var formatNum = num => num ? Number(num).toLocaleString() : '-';
+            var formatNum = val => {
+                if (val !== undefined && val !== null && val !== '' && !isNaN(val)) {
+                    return Number(val).toLocaleString();
+                }
+                return '-';
+            };
 
             var priceValue = item['공시지가(m2)'] !== undefined ? item['공시지가(m2)'] : (item.공시지가 || item['공시지가(원/m2)']);
 
             content.innerHTML = `
-                <div class="popup-title">📍 ${item.법정동} ${item.지번}</div>
+                <div class="popup-title">📍 ${item.법정동 || ''} ${item.지번 || ''}</div>
                 <b>소유구분:</b> ${item.소유주 || '정보없음'}<br>
                 <b>면적:</b> ${formatNum(item.면적)} ㎡<br>
                 <b>공시지가:</b> ${formatNum(priceValue)} 원/㎡<br>
