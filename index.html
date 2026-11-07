@@ -10,21 +10,42 @@
         html, body { width: 100%; height: 100%; margin: 0; padding: 0; font-family: sans-serif; overflow: hidden; }
         #map { width: 100%; height: 100vh; background-color: #f8f9fa; }
 
+        /* 팝업 */
         .ol-popup {
             position: absolute; background-color: white; box-shadow: 0 2px 10px rgba(0,0,0,0.3);
             padding: 14px; border-radius: 10px; border: 1px solid #ccc; bottom: 15px; left: -50px;
-            min-width: 220px; font-size: 14px; line-height: 1.6; z-index: 2000;
+            min-width: 250px; max-width: 320px; font-size: 13px; line-height: 1.6; z-index: 2000;
         }
         .ol-popup-closer { text-decoration: none; position: absolute; top: 6px; right: 12px; color: #888; font-size: 16px; padding: 4px; }
-        .popup-title { font-weight: bold; border-bottom: 1px solid #eee; padding-bottom: 6px; margin-bottom: 8px; font-size: 15px; }
+        .popup-title { font-weight: bold; border-bottom: 1px solid #eee; padding-bottom: 6px; margin-bottom: 6px; font-size: 15px; padding-right: 22px; }
+        .popup-sec { margin-top: 8px; padding-top: 6px; border-top: 1px solid #eee; font-size: 11px; font-weight: bold; color: #888; letter-spacing: .02em; }
+        .popup-row { display: flex; justify-content: space-between; gap: 14px; }
+        .popup-row > b { font-weight: 600; color: #555; white-space: nowrap; }
+        .popup-row > span { text-align: right; }
+        .popup-row .sub { display: block; font-size: 11px; color: #999; }
+        .na { color: #aaa; }
 
-        .legend-box {
-            position: absolute; top: 12px; right: 12px; background: rgba(255,255,255,0.95);
-            padding: 10px 14px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.2); font-size: 12px; z-index: 1000;
+        /* 색상 기준 선택 + 범례 */
+        #panel {
+            position: absolute; top: 12px; right: 12px; width: 210px; max-width: calc(100% - 24px);
+            box-sizing: border-box; background: rgba(255,255,255,0.96); padding: 10px 12px;
+            border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.2); font-size: 12px; z-index: 1000;
         }
-        .legend-title { font-weight: bold; margin-bottom: 4px; border-bottom: 1px solid #ddd; padding-bottom: 2px; }
-        .legend-item { display: flex; align-items: center; margin-bottom: 2px; }
-        .color-dot { width: 12px; height: 12px; border-radius: 3px; display: inline-block; margin-right: 6px; border: 1px solid #999; }
+        .panel-title { font-weight: bold; margin-bottom: 6px; }
+        #mode-buttons { display: flex; border: 1px solid #c9ced3; border-radius: 6px; overflow: hidden; margin-bottom: 10px; }
+        #mode-buttons button {
+            flex: 1; padding: 6px 2px; border: 0; border-right: 1px solid #c9ced3; background: #fff;
+            font: inherit; color: #333; cursor: pointer;
+        }
+        #mode-buttons button:last-child { border-right: 0; }
+        #mode-buttons button:hover { background: #f1f3f5; }
+        #mode-buttons button[aria-checked="true"] { background: #2c3e50; color: #fff; font-weight: bold; }
+        #mode-buttons button:focus-visible { outline: 2px solid #2980B9; outline-offset: -2px; }
+        .legend-title { font-weight: bold; margin-bottom: 4px; border-bottom: 1px solid #ddd; padding-bottom: 3px; }
+        .legend-item { display: flex; align-items: center; margin-bottom: 3px; }
+        .legend-item .label { flex: 1; }
+        .legend-item .count { color: #888; margin-left: 8px; font-variant-numeric: tabular-nums; }
+        .color-dot { width: 12px; height: 12px; border-radius: 3px; display: inline-block; margin-right: 6px; border: 1px solid rgba(0,0,0,0.35); flex: none; }
 
         #status {
             position: absolute; left: 12px; bottom: 12px; max-width: 70%;
@@ -38,11 +59,11 @@
 <div id="map"></div>
 <div id="status">필지 데이터 준비 중...</div>
 
-<div class="legend-box">
-    <div class="legend-title">필지 소유구분 범례</div>
-    <div class="legend-item"><span class="color-dot" style="background-color: rgba(231,76,60,0.55); border-color:#E74C3C;"></span>개인 소유</div>
-    <div class="legend-item"><span class="color-dot" style="background-color: rgba(39,174,96,0.55); border-color:#27AE60;"></span>법인 · 종교시설</div>
-    <div class="legend-item"><span class="color-dot" style="background-color: rgba(41,128,185,0.55); border-color:#2980B9;"></span>국 · 도 · 시유지</div>
+<div id="panel">
+    <div class="panel-title">색상 기준</div>
+    <div id="mode-buttons" role="radiogroup" aria-label="색상 기준"></div>
+    <div class="legend-title" id="legend-title"></div>
+    <div id="legend-items"></div>
 </div>
 
 <div id="popup" class="ol-popup">
@@ -55,17 +76,172 @@
     // VWorld에 등록한 도메인과 같아야 합니다. (WebStorm 내장 서버 기준)
     var DOMAIN = window.location.hostname ? window.location.host : 'localhost:63342';
 
-    // 청량리동만 걸러내고 싶을 때 법정동코드(PNU 앞 10자리)를 넣으세요. 비워두면 영역 내 전체 대상.
-    var DONG_CODE = '';
+    var DATA_URL = 'land_data_vworld.json';
 
     // 조회 영역 (경도/위도, EPSG:4326)
     var BBOX = [127.038, 37.580, 127.049, 37.590];
 
-    // 연속지적도(WMS) 경계선 이미지 표시 여부. 켜면 미매칭 필지의 경계선도 함께 보입니다.
+    // 연속지적도(WMS) 경계선 이미지 표시 여부. 켜면 JSON에 없는 필지의 경계선도 함께 보입니다.
     var SHOW_CADASTRAL = false;
+
+    // 필지 고유번호(PNU) 앞 10자리 = 법정동코드. 같은 지번이 청량리동/제기동에 모두 있어서 동을 구분합니다.
+    // (PNU로 못 찾으면 VWorld 속성의 주소 글자에서 동 이름을 찾습니다)
+    var DONG_CODES = { '청량리동': '1123010700', '제기동': '1123010300' };
 
     var statusEl = document.getElementById('status');
     function setStatus(msg) { statusEl.textContent = msg; console.log(msg); }
+
+    /* ---------- 공용 도우미 ---------- */
+    function esc(s) {
+        return String(s).replace(/[&<>"']/g, function (c) {
+            return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+        });
+    }
+    function hexToRgba(hex, a) {
+        var n = parseInt(hex.slice(1), 16);
+        return 'rgba(' + (n >> 16) + ',' + ((n >> 8) & 255) + ',' + (n & 255) + ',' + a + ')';
+    }
+    function numOrNull(v) {
+        if (typeof v === 'number' && isFinite(v)) return v;
+        if (typeof v === 'string' && /^[\d,]+(\.\d+)?$/.test(v.trim())) return Number(v.replace(/,/g, ''));
+        return null;
+    }
+    function fmtNum(v) { return v === null || v === undefined ? '-' : Number(v).toLocaleString(); }
+    // 큰 금액은 억/만 단위로
+    function fmtWon(v) {
+        if (v >= 1e8) return (Math.round(v / 1e6) / 100).toLocaleString() + '억원';
+        if (v >= 1e4) return Math.round(v / 1e4).toLocaleString() + '만원';
+        return v.toLocaleString() + '원';
+    }
+    function fmtMan(v) { return (v / 10000).toLocaleString() + '만'; }
+
+    // "123-4", "123-4대", "청량리동 123-4번지", "산 12" 등을 "123-4" / "산12" 형태로 통일
+    function normJibun(s) {
+        var str = String(s || '').replace(/번지/g, '');
+        var m = str.match(/(산)?\s*(\d+)(?:\s*-\s*(\d+))?/);
+        if (!m) return '';
+        return (m[1] ? '산' : '') + m[2] + (m[3] ? '-' + m[3] : '');
+    }
+
+    /* ---------- JSON 한 건을 코드에서 쓰는 모양으로 ---------- */
+    // tojson.py 가 만든 이름과, 엑셀 컬럼 이름 그대로인 JSON 모두 읽을 수 있게 처리
+    function pick(o, names) {
+        for (var i = 0; i < names.length; i++) {
+            var v = o[names[i]];
+            if (v !== undefined && v !== null && v !== '') return v;
+        }
+        return null;
+    }
+    function normalizeItem(r) {
+        return {
+            jibun: String(r['지번'] || '').trim(),
+            dong: String(r['법정동'] || '').trim(),
+            owner: String(r['소유주'] || '').trim(),
+            price: numOrNull(pick(r, ['공시지가'])),       // 원/㎡
+            area: numOrNull(pick(r, ['면적'])),            // ㎡
+            total: numOrNull(pick(r, ['지가'])),           // 총 토지가액(원)
+            landYear: pick(r, ['토지변경연도', '최근 토지 소유주 변경 연도']),
+            bldYear: pick(r, ['건물변경연도', '최근 건물 소유주 변경 연도']),
+            landMort: pick(r, ['토지근저당', '토지 근저당 설정액']),   // 숫자(0=없음) / 글자 / null=미입력
+            bldMort: pick(r, ['건물근저당', '건물 근저당 설정액']),
+            note: pick(r, ['비고'])
+        };
+    }
+
+    /* ---------- 색상 기준(모드) 정의 ---------- */
+    var OWNER_CATS = [
+        { key: 'personal', label: '개인 소유',       color: '#E74C3C' },
+        { key: 'corp',     label: '법인 · 종교시설', color: '#27AE60' },
+        { key: 'public',   label: '국 · 도 · 시 · 군유지', color: '#2980B9' },
+        { key: 'other',    label: '외국인 · 기타',   color: '#8E44AD' }
+    ];
+    var NA_CAT = { key: 'na', label: '정보 없음 (미입력)', color: '#B0B7BB' };
+    var MORTGAGE_CATS = [
+        { key: 'none', label: '근저당 없음',  color: '#74C69D' },
+        { key: 'm1',   label: '1억 미만',     color: '#FDD49E' },
+        { key: 'm2',   label: '1억 ~ 5억',    color: '#FC8D59' },
+        { key: 'm3',   label: '5억 ~ 10억',   color: '#E34A33' },
+        { key: 'm4',   label: '10억 이상',    color: '#7F0000' },
+        NA_CAT
+    ];
+    var PRICE_RAMP = ['#C7E9B4', '#7FCDBB', '#41B6C4', '#2C7FB8', '#253494'];
+    var priceCuts = [];   // 공시지가 구간 경계값(오름차순). JSON을 읽은 뒤 계산
+
+    function ownerCat(it) {
+        var o = it.owner;
+        if (o === '개인') return 'personal';
+        if (/법인|종교/.test(o)) return 'corp';
+        if (/국유|도유|시유|군유|구유|공유/.test(o)) return 'public';   // "시, 도유지" 는 '도유'에 걸림
+        return 'other';
+    }
+
+    // 공시지가는 전체 JSON을 5등분(각 구간에 비슷한 개수)해서 10만원 단위로 반올림한 경계값 사용
+    function buildPriceCuts(items) {
+        var vals = items.map(function (i) { return i.price; })
+            .filter(function (v) { return v !== null; })
+            .sort(function (a, b) { return a - b; });
+        var cuts = [];
+        if (!vals.length) { priceCuts = cuts; return; }
+        for (var q = 1; q <= 4; q++) {
+            var v = Math.round(vals[Math.floor(vals.length * q / 5)] / 100000) * 100000;
+            if (!cuts.length || v > cuts[cuts.length - 1]) cuts.push(v);
+        }
+        priceCuts = cuts;
+    }
+    function priceCats() {
+        var n = priceCuts.length + 1, cats = [];
+        for (var i = 0; i < n; i++) {
+            var label;
+            if (!priceCuts.length) label = '전체';   // JSON을 읽기 전
+            else if (i === 0) label = fmtMan(priceCuts[0]) + ' 미만';
+            else if (i === n - 1) label = fmtMan(priceCuts[n - 2]) + ' 이상';
+            else label = fmtMan(priceCuts[i - 1]) + ' ~ ' + fmtMan(priceCuts[i]);
+            var color = PRICE_RAMP[n === 1 ? 0 : Math.round(i * (PRICE_RAMP.length - 1) / (n - 1))];
+            cats.push({ key: 'p' + i, label: label, color: color });
+        }
+        cats.push(NA_CAT);
+        return cats;
+    }
+    function priceCat(it) {
+        if (it.price === null) return 'na';
+        var i = 0;
+        while (i < priceCuts.length && it.price >= priceCuts[i]) i++;
+        return 'p' + i;
+    }
+
+    // 근저당: 토지+건물 합계 기준. '공동담보'(토지·건물이 한 담보)면 금액이 겹치므로 큰 값 하나만 사용
+    function mortgageTotal(it) {
+        var land = numOrNull(it.landMort), bld = numOrNull(it.bldMort);
+        if (land === null && bld === null) return null;   // 아직 입력 안 함
+        if (it.note && String(it.note).indexOf('공동담보') >= 0) return Math.max(land || 0, bld || 0);
+        return (land || 0) + (bld || 0);
+    }
+    function mortgageCat(it) {
+        var t = mortgageTotal(it);
+        if (t === null) return 'na';
+        if (t === 0) return 'none';
+        if (t < 1e8) return 'm1';
+        if (t < 5e8) return 'm2';
+        if (t < 1e9) return 'm3';
+        return 'm4';
+    }
+
+    var MODES = {
+        owner:    { label: '소유주 형태', legendTitle: '토지 소유주 형태',           cats: function () { return OWNER_CATS; },    classify: ownerCat },
+        price:    { label: '공시지가',    legendTitle: '공시지가 (원/㎡)',            cats: priceCats,                             classify: priceCat },
+        mortgage: { label: '근저당',      legendTitle: '근저당 설정액 (토지+건물)',   cats: function () { return MORTGAGE_CATS; }, classify: mortgageCat }
+    };
+    var MODE_ORDER = ['owner', 'price', 'mortgage'];
+    var currentMode = 'owner';
+    var colorMaps = {};   // colorMaps[모드][구간키] = 색
+
+    function rebuildColorMaps() {
+        MODE_ORDER.forEach(function (m) {
+            colorMaps[m] = {};
+            MODES[m].cats().forEach(function (c) { colorMaps[m][c.key] = c.color; });
+        });
+    }
+    rebuildColorMaps();
 
     /* ---------- 지도 ---------- */
     var baseLayer = new ol.layer.Tile({
@@ -88,9 +264,24 @@
         opacity: 0.8
     });
 
-    // VectorImage: 폴리곤을 이미지로 렌더링해서 이동/확대가 훨씬 빠름
+    // 필지 색은 레이어 스타일 함수가 현재 모드에 맞춰 결정 (모드를 바꾸면 changed()로 다시 그림)
+    var STYLE_CACHE = {};
+    function featureStyle(feature) {
+        var info = feature.get('landInfo');
+        if (!info) return null;
+        var color = colorMaps[currentMode][info.cats[currentMode]] || NA_CAT.color;
+        if (!STYLE_CACHE[color]) {
+            STYLE_CACHE[color] = new ol.style.Style({
+                fill: new ol.style.Fill({ color: hexToRgba(color, 0.62) }),
+                stroke: new ol.style.Stroke({ color: 'rgba(44,62,80,0.55)', width: 1 })
+            });
+        }
+        return STYLE_CACHE[color];
+    }
+
+    // VectorImage: 폴리곤을 이미지로 렌더링해서 이동/확대가 빠름
     var parcelVectorSource = new ol.source.Vector();
-    var parcelVectorLayer = new ol.layer.VectorImage({ source: parcelVectorSource, zIndex: 10 });
+    var parcelVectorLayer = new ol.layer.VectorImage({ source: parcelVectorSource, style: featureStyle, zIndex: 10 });
 
     var layers = [baseLayer];
     if (SHOW_CADASTRAL) layers.push(landCadastralLayer);
@@ -109,58 +300,76 @@
         view: new ol.View({ center: ol.proj.fromLonLat([127.0435, 37.5855]), zoom: 17 })
     });
 
-    /* ---------- 색상 ---------- */
-    var STYLE_CACHE = {};
-    function makeStyle(fill, stroke) {
-        var k = fill + stroke;
-        if (!STYLE_CACHE[k]) {
-            STYLE_CACHE[k] = new ol.style.Style({
-                fill: new ol.style.Fill({ color: fill }),
-                stroke: new ol.style.Stroke({ color: stroke, width: 1.5 })
-            });
-        }
-        return STYLE_CACHE[k];
+    /* ---------- 색상 기준 선택 UI + 범례 ---------- */
+    var modeButtonsEl = document.getElementById('mode-buttons');
+    var legendTitleEl = document.getElementById('legend-title');
+    var legendItemsEl = document.getElementById('legend-items');
+
+    MODE_ORDER.forEach(function (m) {
+        var b = document.createElement('button');
+        b.type = 'button';
+        b.setAttribute('role', 'radio');
+        b.dataset.mode = m;
+        b.textContent = MODES[m].label;
+        b.onclick = function () { setMode(m); };
+        modeButtonsEl.appendChild(b);
+    });
+
+    function renderLegend() {
+        var mode = MODES[currentMode];
+        var counts = {};
+        parcelVectorSource.getFeatures().forEach(function (f) {
+            var k = f.get('landInfo').cats[currentMode];
+            counts[k] = (counts[k] || 0) + 1;
+        });
+        legendTitleEl.textContent = mode.legendTitle;
+        legendItemsEl.innerHTML = mode.cats().map(function (c) {
+            var n = counts[c.key] || 0;
+            if (c.key === 'na' && !n && parcelVectorSource.getFeatures().length) return '';   // 해당 없으면 숨김
+            return '<div class="legend-item"><span class="color-dot" style="background-color:' + hexToRgba(c.color, 0.62) + '"></span>' +
+                '<span class="label">' + esc(c.label) + '</span><span class="count">' + n + '</span></div>';
+        }).join('');
+        Array.prototype.forEach.call(modeButtonsEl.children, function (b) {
+            b.setAttribute('aria-checked', b.dataset.mode === currentMode ? 'true' : 'false');
+        });
     }
 
-    function getPolygonStyle(ownerType) {
-        var owner = String(ownerType || '').trim();
-        // 한 글자('도','시','구')로 판별하면 개인 이름이 오분류되므로 구체적인 단어로 비교
-        if (/국유|도유|시유|군유|구유|공유|대한민국|특별시|광역시|자치|^국$/.test(owner)) {
-            return makeStyle('rgba(41,128,185,0.55)', '#2980B9');   // 공공
-        }
-        if (/법인|종교|교회|사찰|성당|재단|학교|주식회사|\(주\)|㈜|조합|회사/.test(owner)) {
-            return makeStyle('rgba(39,174,96,0.55)', '#27AE60');    // 법인·종교
-        }
-        return makeStyle('rgba(231,76,60,0.55)', '#E74C3C');        // 개인
+    function setMode(m) {
+        currentMode = m;
+        renderLegend();
+        parcelVectorLayer.changed();   // 스타일 함수를 다시 적용
     }
-
-    /* ---------- 지번 정규화 ---------- */
-    // "123-4", "123-4 대", "청량리동 123-4번지", "산 12" 등을 모두 "123-4" / "산12" 형태로 통일
-    function normJibun(s) {
-        var str = String(s || '').replace(/번지/g, '');
-        var m = str.match(/(산)?\s*(\d+)(?:\s*-\s*(\d+))?/);
-        if (!m) return '';
-        return (m[1] ? '산' : '') + m[2] + (m[3] ? '-' + m[3] : '');
-    }
+    renderLegend();
 
     /* ---------- JSON 로드 ---------- */
-    var landDataMap = {};
+    var landDataMap = {};   // '동|지번' -> item
+    var byJibun = {};       // 지번 -> [item...] (동 판별이 전혀 안 될 때만 사용하는 예비 매칭용)
+    var dongNames = [];
 
-    fetch('land_data_vworld.json')
+    fetch(DATA_URL)
         .then(function (res) {
             if (!res.ok) throw new Error('HTTP ' + res.status);
             return res.json();
         })
         .then(function (jsonData) {
-            jsonData.forEach(function (item) {
-                var key = normJibun(item.지번);
-                if (key) landDataMap[key] = item;
+            jsonData.forEach(function (raw) {
+                var it = normalizeItem(raw);
+                var nj = normJibun(it.jibun);
+                if (!nj) return;
+                it.key = it.dong + '|' + nj;
+                landDataMap[it.key] = it;
+                (byJibun[nj] = byJibun[nj] || []).push(it);
+                if (it.dong && dongNames.indexOf(it.dong) < 0) dongNames.push(it.dong);
             });
-            setStatus('JSON ' + Object.keys(landDataMap).length + '건 로드 완료\n필지 도형 불러오는 중...');
+            var items = Object.keys(landDataMap).map(function (k) { return landDataMap[k]; });
+            buildPriceCuts(items);
+            rebuildColorMaps();
+            renderLegend();
+            setStatus('JSON ' + items.length + '건 로드 완료\n필지 도형 불러오는 중...');
             loadParcels();
         })
         .catch(function (err) {
-            setStatus('JSON 로드 실패: ' + err.message + '\n(같은 폴더에 land_data_vworld.json 이 있는지, 서버로 열었는지 확인)');
+            setStatus('JSON 로드 실패: ' + err.message + '\n(같은 폴더에 ' + DATA_URL + ' 이 있는지, 서버로 열었는지 확인)');
         });
 
     /* ---------- VWorld Data API ---------- */
@@ -196,9 +405,34 @@
         });
     }
 
+    // 필지가 어느 법정동인지: PNU 앞 10자리 -> 안 되면 속성 문자열에서 동 이름 찾기
+    function resolveDong(props) {
+        var pnu = String(props.pnu || props.PNU || '');
+        for (var name in DONG_CODES) {
+            if (pnu.indexOf(DONG_CODES[name]) === 0) return name;
+        }
+        for (var k in props) {
+            var v = props[k];
+            if (typeof v !== 'string') continue;
+            for (var i = 0; i < dongNames.length; i++) {
+                if (v.indexOf(dongNames[i]) >= 0) return dongNames[i];
+            }
+        }
+        return null;
+    }
+
+    var geojsonFormat = new ol.format.GeoJSON();
+    function makeFeature(fd, item, jibun, props) {
+        var f = geojsonFormat.readFeature(fd, { dataProjection: 'EPSG:4326', featureProjection: 'EPSG:3857' });
+        var cats = {};
+        MODE_ORDER.forEach(function (m) { cats[m] = MODES[m].classify(item); });
+        f.set('landInfo', { jibun: jibun, item: item, props: props, cats: cats });
+        return f;
+    }
+
     async function loadParcels() {
-        var geojson = new ol.format.GeoJSON();
-        var page = 1, totalPages = 1, scanned = 0, matched = 0;
+        var page = 1, totalPages = 1, scanned = 0, matched = 0, resolved = 0;
+        var usedKeys = {}, unresolved = [];
 
         try {
             while (page <= totalPages && page <= 30) {
@@ -214,49 +448,110 @@
                 var batch = [];
                 resp.result.featureCollection.features.forEach(function (fd) {
                     var props = fd.properties || {};
-                    if (DONG_CODE && String(props.pnu || '').indexOf(DONG_CODE) !== 0) return;
-
                     scanned++;
                     var jibun = props.jibun || props.JIBUN || '';
-                    var item = landDataMap[normJibun(jibun)];
-                    if (!item) return;          // 미매칭은 도형 변환 없이 건너뜀
-                    matched++;
+                    var nj = normJibun(jibun);
+                    var dong = resolveDong(props);
+                    if (!dong) { unresolved.push({ fd: fd, jibun: jibun, nj: nj, props: props }); return; }
+                    resolved++;
 
-                    var f = geojson.readFeature(fd, {
-                        dataProjection: 'EPSG:4326',
-                        featureProjection: 'EPSG:3857'
-                    });
-                    f.setStyle(getPolygonStyle(item.소유주));
-                    f.set('landInfo', { jibun: jibun, item: item, props: props });
-                    batch.push(f);
+                    var item = landDataMap[dong + '|' + nj];
+                    if (!item) return;          // JSON에 없는 필지는 도형 변환 없이 건너뜀
+                    usedKeys[item.key] = true;
+                    matched++;
+                    batch.push(makeFeature(fd, item, jibun, props));
                 });
                 parcelVectorSource.addFeatures(batch);   // 한 번에 추가해서 리렌더 최소화
 
                 setStatus('조회 ' + scanned + '개 중 ' + matched + '개 표시 중... (' + page + '/' + totalPages + ' 페이지)');
                 page++;
             }
-            setStatus('조회 ' + scanned + '개 중 ' + matched + '개 채색 완료 (미매칭 ' + (scanned - matched) + '개는 숨김)');
+
+            // 예비: 동을 하나도 판별하지 못했다면(속성 이름이 예상과 다른 경우) 지번만으로 매칭
+            var fallbackNote = '';
+            if (resolved === 0 && unresolved.length) {
+                var batch2 = [];
+                unresolved.forEach(function (u) {
+                    var cands = byJibun[u.nj];
+                    if (cands && cands.length === 1) {   // 두 동에 같은 지번이 있으면 구분할 수 없어 제외
+                        usedKeys[cands[0].key] = true;
+                        matched++;
+                        batch2.push(makeFeature(u.fd, cands[0], u.jibun, u.props));
+                    }
+                });
+                parcelVectorSource.addFeatures(batch2);
+                fallbackNote = '\n※ 필지의 법정동을 판별하지 못해 지번만으로 매칭했어요 (두 동에 모두 있는 지번은 제외)';
+                console.warn('동 판별 실패. 첫 필지 속성:', unresolved[0].props);
+            }
+
+            renderLegend();
+            var total = Object.keys(landDataMap).length;
+            var missing = total - Object.keys(usedKeys).length;
+            setStatus('조회 ' + scanned + '개 중 ' + matched + '개 채색 완료 (JSON에 없는 필지는 숨김)' +
+                (missing > 0 ? '\nJSON ' + total + '건 중 ' + missing + '건은 지도에서 도형을 못 찾음' : '') + fallbackNote);
+            if (missing > 0) {
+                console.log('도형을 못 찾은 JSON 항목:', Object.keys(landDataMap).filter(function (k) { return !usedKeys[k]; }));
+            }
         } catch (err) {
             setStatus('필지 도형 로드 오류: ' + err.message);
         }
     }
 
     /* ---------- 클릭 팝업 ---------- */
+    function row(label, valueHtml, subHtml) {
+        return '<div class="popup-row"><b>' + label + '</b><span>' + valueHtml +
+            (subHtml ? '<span class="sub">' + subHtml + '</span>' : '') + '</span></div>';
+    }
+    var NA_HTML = '<span class="na">정보 없음</span>';
+
+    function yearHtml(v) {
+        if (v === null) return NA_HTML;
+        var s = String(v).trim();
+        if (s === '건물X') return '건물 없음';
+        if (/^\d{4}$/.test(s)) return esc(s) + '년';
+        return esc(s);   // "2018(지분 이전)" 처럼 설명이 붙은 값은 그대로
+    }
+
+    // kind: 'land' | 'bld'
+    function mortgageHtml(it, kind) {
+        var v = kind === 'land' ? it.landMort : it.bldMort;
+        var n = numOrNull(v);
+        if (n !== null) {
+            if (n === 0) return '없음';
+            return '<b>' + fmtWon(n) + '</b>' + (n >= 1e4 ? '<span class="sub">' + n.toLocaleString() + '원</span>' : '');
+        }
+        if (v !== null) {
+            var s = String(v).trim();
+            if (s === '건물X') return '건물 없음';
+            if (s === '공동담보') return '토지와 공동담보';
+            return esc(s);
+        }
+        // 건물 칸이 비어 있어도 비고에 공동담보라고 적혀 있으면 토지 근저당에 포함된 것
+        if (kind === 'bld' && it.note && String(it.note).indexOf('공동담보') >= 0) return '토지와 공동담보';
+        return NA_HTML;
+    }
+
     map.on('singleclick', function (evt) {
         var clicked = map.forEachFeatureAtPixel(evt.pixel, function (f) { return f; });
         if (!clicked || !clicked.get('landInfo')) { overlay.setPosition(undefined); return; }
 
         var info = clicked.get('landInfo');
-        var item = info.item;
-        var fmt = function (v) { return (v !== undefined && v !== null && v !== '' && !isNaN(v)) ? Number(v).toLocaleString() : '-'; };
-        var price = item['공시지가(m2)'] !== undefined ? item['공시지가(m2)'] : (item.공시지가 || item['공시지가(원/m2)']);
+        var it = info.item;
+        var showNote = it.note && String(it.note).indexOf('공동담보') < 0;   // 공동담보는 건물 근저당 줄에 이미 표시됨
 
         content.innerHTML =
-            '<div class="popup-title">🏢 ' + (item.법정동 || '청량리동') + ' ' + (info.jibun || '정보없음') + '</div>' +
-            '<b>소유구분:</b> ' + (item.소유주 || '-') + '<br>' +
-            '<b>면적:</b> ' + fmt(item.면적) + ' ㎡<br>' +
-            '<b>공시지가:</b> ' + fmt(price) + ' 원/㎡<br>' +
-            '<b>총 토지가액:</b> ' + fmt(item.지가);
+            '<div class="popup-title">🏢 ' + esc(it.dong || '청량리동') + ' ' + esc(it.jibun || info.jibun || '정보없음') + '</div>' +
+            row('소유구분', it.owner ? esc(it.owner) : NA_HTML) +
+            row('면적', it.area === null ? '-' : fmtNum(it.area) + ' ㎡') +
+            row('공시지가', it.price === null ? '-' : fmtNum(it.price) + ' 원/㎡') +
+            row('총 토지가액', it.total === null ? '-' : fmtWon(it.total), it.total === null ? '' : fmtNum(it.total) + '원') +
+            '<div class="popup-sec">최근 소유주 변경</div>' +
+            row('토지', yearHtml(it.landYear)) +
+            row('건물', yearHtml(it.bldYear)) +
+            '<div class="popup-sec">근저당 설정액</div>' +
+            row('토지', mortgageHtml(it, 'land')) +
+            row('건물', mortgageHtml(it, 'bld')) +
+            (showNote ? '<div class="popup-sec">비고</div><div>' + esc(it.note) + '</div>' : '');
         overlay.setPosition(evt.coordinate);
     });
 </script>
