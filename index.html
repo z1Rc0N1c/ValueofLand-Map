@@ -400,9 +400,16 @@
 
     function fetchPage(page) {
         var url = buildUrl(page);
-        return jsonp(url).catch(function () {
-            return fetch(url).then(function (r) { return r.json(); });
-        });
+        var tries = 0;
+        function attempt() {
+            // 새 시도마다 새 콜백 이름을 쓰므로, 늦게 도착한 이전 응답이 섞이지 않음
+            return jsonp(url, 30000).catch(function (err) {
+                if (++tries >= 3) throw new Error('VWorld 응답 없음 (' + page + '페이지, ' + err.message + ')');
+                setStatus('' + page + '페이지 응답이 느려 다시 시도 중... (' + tries + '/3)');
+                return attempt();
+            });
+        }
+        return attempt();
     }
 
     // 필지가 어느 법정동인지: PNU 앞 10자리 -> 안 되면 속성 문자열에서 동 이름 찾기
