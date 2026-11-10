@@ -89,6 +89,13 @@
         .zone-actions button { flex: 1; }
         #zone-hint { color: #666; line-height: 1.5; font-size: 11px; }
 
+        .popup-lines { margin: 2px 0 0; padding-left: 16px; }
+        .popup-btn {
+            margin-top: 10px; width: 100%; padding: 6px 8px; border: 1px solid #c9ced3; border-radius: 6px;
+            background: #fff; font: inherit; color: #333; cursor: pointer;
+        }
+        .popup-btn:hover { background: #f1f3f5; }
+
         #status {
             position: absolute; left: 12px; bottom: 12px; max-width: 70%;
             background: rgba(0,0,0,0.75); color: #fff; padding: 8px 12px; border-radius: 6px;
@@ -316,6 +323,38 @@
     var ZONE_BY_KEY = {};
     ZONE_CATS.forEach(function (z) { ZONE_BY_KEY[z.key] = z; });
 
+    // 구역별 사업 정보 (구역을 클릭하면 팝업에 표시)
+    var ZONE_INFO = {
+        cr6: {
+            name: '청량리 제6구역',
+            stages: ['사업시행인가 (2024.11.07)', '관리처분계획(안) 재공람 (2026.10.8 ~ 2026.11.9)', '관리처분계획 수립 총회 개최 (2026.11.15)'],
+            move: '2032년 예정 (기존 28년 11월에서 지연)',
+            builderLabel: '시공사', builder: 'GS건설',
+            units: '공동주택 1,493세대', unitsSub: '분양 1,239세대 + 임대 254세대'
+        },
+        cr8: {
+            name: '청량리 제8구역',
+            stages: ['관리처분계획인가 (2025.09.25) 이후 이주 중'],
+            move: '2030.01',
+            builderLabel: '사업 주체', builder: '롯데건설',
+            units: '610세대', unitsSub: '분양 460세대 + 임대 150세대'
+        },
+        jg4: {
+            name: '제기 제4구역',
+            stages: ['착공 신고 완료 (2026.07.30)'],
+            move: '2029.09',
+            builderLabel: '사업 주체', builder: '현대건설',
+            units: '909세대', unitsSub: '분양 753세대 + 임대 156세대'
+        },
+        jg6: {
+            name: '제기 제6구역',
+            stages: ['관리처분인가 (2023.11.10)', '통합심의 조건부 의결 (2026.10.15)'],
+            move: '미정',
+            builderLabel: '사업 주체', builder: 'SK에코플랜트 (구 SK건설)',
+            units: '423세대 → 445세대', unitsSub: '분양 350세대 + 임대 73세대 (22세대 증가)'
+        }
+    };
+
     var MODES = {
         owner:    { label: '소유주 형태', legendTitle: '토지 소유주 형태',           cats: function () { return OWNER_CATS; },    classify: ownerCat },
         price:    { label: '공시지가',    legendTitle: '공시지가 (원/㎡)',            cats: priceCats,                             classify: priceCat },
@@ -361,8 +400,8 @@
     function featureStyle(feature) {
         var info = feature.get('landInfo');
         if (!info) return null;
-        // 재개발 구역 모드: 구역 안 필지는 경계선·색을 없애고(투명, 클릭만 가능), 구역 전체를 zoneLayer 가 한 덩어리로 칠함
-        if (currentMode === 'zone' && info.cats.zone && info.cats.zone !== 'none') {
+        // 구역 안 필지는 모든 모드에서 경계선·색을 없애고(투명, 클릭만 가능), 구역 전체를 zoneLayer 가 한 덩어리로 칠함
+        if (info.cats.zone && info.cats.zone !== 'none') {
             var zk = info.sel ? 'zoned-s' : 'zoned';
             if (!STYLE_CACHE[zk]) {
                 STYLE_CACHE[zk] = new ol.style.Style({
@@ -399,18 +438,17 @@
     });
     var areaLayer = new ol.layer.Vector({ source: areaSource, style: AREA_STYLE, zIndex: 20 });
 
-    // 재개발 구역 경계선 + 이름 (구역 모드에서는 구역 전체를 칠함)
+    // 재개발 구역: 모든 모드에서 구역 전체를 칠하고 경계선 + 이름을 표시
     var zoneSource = new ol.source.Vector();
     var ZONE_STYLE_CACHE = {};
     function zoneStyle(f) {
         var key = f.get('zone');
-        var filled = currentMode === 'zone';   // 구역 모드에서는 구역 전체를 칠함
-        var ck = key + (filled ? 'f' : '');
+        var ck = key;
         if (!ZONE_STYLE_CACHE[ck]) {
             var z = ZONE_BY_KEY[key];
             ZONE_STYLE_CACHE[ck] = new ol.style.Style({
                 stroke: new ol.style.Stroke({ color: z ? z.color : '#333', width: 3.5 }),
-                fill: new ol.style.Fill({ color: filled && z ? hexToRgba(z.color, 0.55) : 'rgba(0,0,0,0)' }),
+                fill: new ol.style.Fill({ color: z ? hexToRgba(z.color, 0.5) : 'rgba(0,0,0,0)' }),
                 text: new ol.style.Text({
                     text: z ? z.label : '', font: 'bold 14px sans-serif', overflow: true,
                     fill: new ol.style.Fill({ color: '#222' }), stroke: new ol.style.Stroke({ color: '#fff', width: 4 })
@@ -1057,19 +1095,10 @@
         return NA_HTML;
     }
 
-    map.on('singleclick', function (evt) {
-        if (activeTool || editMode || Date.now() < suppressClickUntil) return;   // 범위를 그리는 중에는 팝업을 열지 않음
-        var clicked = map.forEachFeatureAtPixel(evt.pixel, function (f) { return f; }, {
-            layerFilter: function (l) { return l === parcelVectorLayer; }
-        });
-        if (!clicked || !clicked.get('landInfo')) { overlay.setPosition(undefined); return; }
-
-        var info = clicked.get('landInfo');
+    function parcelPopupHtml(info) {
         var it = info.item;
         var showNote = it.note && String(it.note).indexOf('공동담보') < 0;   // 공동담보는 건물 근저당 줄에 이미 표시됨
-
-        content.innerHTML =
-            '<div class="popup-title">🏢 ' + esc(it.dong || '청량리동') + ' ' + esc(it.jibun || info.jibun || '정보없음') + '</div>' +
+        return '<div class="popup-title">🏢 ' + esc(it.dong || '청량리동') + ' ' + esc(it.jibun || info.jibun || '정보없음') + '</div>' +
             row('소유구분', it.owner ? esc(it.owner) : NA_HTML) +
             (zoneSource.getFeatures().length
                 ? row('재개발 구역', info.cats.zone && info.cats.zone !== 'none' ? '<b>' + esc(ZONE_BY_KEY[info.cats.zone].label) + '</b>' : '<span class="na">구역 밖</span>')
@@ -1084,7 +1113,71 @@
             row('토지', mortgageHtml(it, 'land')) +
             row('건물', mortgageHtml(it, 'bld')) +
             (showNote ? '<div class="popup-sec">비고</div><div>' + esc(it.note) + '</div>' : '');
-        overlay.setPosition(evt.coordinate);
+    }
+
+    // 구역 정보 팝업: 사업 정보(ZONE_INFO) + 지도에 올라온 구역 내 필지 합계
+    function zonePopupHtml(zoneKey) {
+        var z = ZONE_BY_KEY[zoneKey], inf = ZONE_INFO[zoneKey];
+        var zg = {};
+        parcelVectorSource.getFeatures().forEach(function (f) {
+            var info = f.get('landInfo');
+            if (info.cats.zone === zoneKey) addZoneGroup(zg, info);
+        });
+        var g = zg[zoneKey];
+        var html = '<div class="popup-title"><span class="color-dot" style="background-color:' + hexToRgba(z.color, 0.8) + '"></span>' +
+            esc(inf ? inf.name : z.label) + '</div>';
+        if (inf) {
+            html += '<div class="popup-sec">현재 사업 단계</div><ul class="popup-lines">' +
+                inf.stages.map(function (t) { return '<li>' + esc(t) + '</li>'; }).join('') + '</ul>' +
+                row('입주 예정일', esc(inf.move)) +
+                row(esc(inf.builderLabel), esc(inf.builder)) +
+                row('세대 수', esc(inf.units), esc(inf.unitsSub));
+        } else {
+            html += '<div class="na">등록된 구역 정보가 없어요.</div>';
+        }
+        html += '<div class="popup-sec">구역 안 필지 (지도 데이터)</div>' +
+            (g
+                ? row('필지 수', g.n.toLocaleString() + '개') +
+                  row('토지가액 합', fmtSum(g.value)) +
+                  row('근저당 합', g.mortN === 0 ? '<span class="na">미입력</span>' : fmtSum(g.mort), g.mortN === 0 ? '' : '입력 ' + g.mortN + '/' + g.n + '필지')
+                : '<div class="na">표시된 필지가 없어요.</div>');
+        return html;
+    }
+
+    function showPopup(html, coordinate) {
+        content.innerHTML = html;
+        overlay.setPosition(coordinate);
+    }
+
+    map.on('singleclick', function (evt) {
+        if (activeTool || editMode || Date.now() < suppressClickUntil) return;   // 범위를 그리는 중에는 팝업을 열지 않음
+        var zoneF = map.forEachFeatureAtPixel(evt.pixel, function (f) { return f; }, {
+            layerFilter: function (l) { return l === zoneLayer; }
+        });
+        var parcelF = map.forEachFeatureAtPixel(evt.pixel, function (f) { return f; }, {
+            layerFilter: function (l) { return l === parcelVectorLayer; }
+        });
+        var info = parcelF && parcelF.get('landInfo');
+
+        // 재개발 구역 안을 클릭하면 구역 정보를 먼저 보여주고, 버튼으로 그 자리의 필지 정보로 넘어감
+        if (zoneF) {
+            var zoneKey = zoneF.get('zone'), coord = evt.coordinate;
+            var showZone = function () {
+                showPopup(zonePopupHtml(zoneKey) +
+                    (info ? '<button type="button" class="popup-btn" id="popup-switch">이 자리의 필지 정보 보기</button>' : ''), coord);
+                var sw = document.getElementById('popup-switch');
+                if (sw) sw.onclick = showParcel;
+            };
+            var showParcel = function () {
+                showPopup(parcelPopupHtml(info) + '<button type="button" class="popup-btn" id="popup-switch">← 구역 정보로 돌아가기</button>', coord);
+                document.getElementById('popup-switch').onclick = showZone;
+            };
+            showZone();
+            return;
+        }
+
+        if (!info) { overlay.setPosition(undefined); return; }
+        showPopup(parcelPopupHtml(info), evt.coordinate);
     });
 </script>
 
