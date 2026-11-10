@@ -37,6 +37,7 @@
             padding: 6px 2px; border: 0; background: #fff;
             font: inherit; color: #333; cursor: pointer;
         }
+        #mode-buttons button:last-child:nth-child(odd) { grid-column: 1 / -1; }
         #mode-buttons button:hover { background: #f1f3f5; }
         #mode-buttons button[aria-checked="true"] { background: #2c3e50; color: #fff; font-weight: bold; }
         #mode-buttons button:focus-visible { outline: 2px solid #2980B9; outline-offset: -2px; }
@@ -355,13 +356,33 @@
         }
     };
 
+    // 용도지역 (VWorld LT_C_UQ111 도형의 uname 으로 필지마다 자동 배정. 직접 입력 필요 없음)
+    var ZONING_DATA = 'LT_C_UQ111';
+    var ZONING_BOX = [127.030, 37.575, 127.057, 37.595];   // 필지 조회 영역보다 넉넉하게
+    var ZONING_NA = { key: 'na', label: '용도지역 정보 없음', color: '#B0B7BB' };
+    var ZONING_ORDER = ['제1종전용주거지역', '제2종전용주거지역', '제1종일반주거지역', '제2종일반주거지역', '제3종일반주거지역', '준주거지역',
+        '중심상업지역', '일반상업지역', '근린상업지역', '유통상업지역', '전용공업지역', '일반공업지역', '준공업지역',
+        '보전녹지지역', '생산녹지지역', '자연녹지지역'];
+    var ZONING_COLORS = {
+        '제1종전용주거지역': '#FFF59D', '제2종전용주거지역': '#FFEE58', '제1종일반주거지역': '#FFE082',
+        '제2종일반주거지역': '#FFB74D', '제3종일반주거지역': '#FB8C00', '준주거지역': '#F06292',
+        '중심상업지역': '#C62828', '일반상업지역': '#E53935', '근린상업지역': '#EF9A9A', '유통상업지역': '#F48FB1',
+        '전용공업지역': '#6A1B9A', '일반공업지역': '#9575CD', '준공업지역': '#B39DDB',
+        '보전녹지지역': '#1B5E20', '생산녹지지역': '#66BB6A', '자연녹지지역': '#A5D6A7'
+    };
+    var ZONING_FALLBACK = ['#4DB6AC', '#7986CB', '#A1887F', '#90A4AE'];
+    var zoningCatList = [];      // 실제로 받아온 용도지역들 (범례용)
+    var zoningPolys = [];        // [{ name, bbox, polys: [ [외곽링, 구멍링...], ... ] }]  (EPSG:3857)
+    var zoningLoaded = false;
+
     var MODES = {
         owner:    { label: '소유주 형태', legendTitle: '토지 소유주 형태',           cats: function () { return OWNER_CATS; },    classify: ownerCat },
         price:    { label: '공시지가',    legendTitle: '공시지가 (원/㎡)',            cats: priceCats,                             classify: priceCat },
         mortgage: { label: '근저당',      legendTitle: '근저당 설정액 (토지+건물)',   cats: function () { return MORTGAGE_CATS; }, classify: mortgageCat },
-        zone:     { label: '재개발 구역', legendTitle: '재개발 구역',                cats: function () { return ZONE_CATS; },     classify: function () { return 'none'; } }   // 실제 구역은 assignZones() 가 채움
+        zone:     { label: '재개발 구역', legendTitle: '재개발 구역',                cats: function () { return ZONE_CATS; },     classify: function () { return 'none'; } },   // 실제 구역은 assignZones() 가 채움
+        use:      { label: '용도지역',    legendTitle: '용도지역',                    cats: function () { return zoningCatList.concat([ZONING_NA]); }, classify: function () { return 'na'; } }   // 실제 값은 assignZoning() 이 채움
     };
-    var MODE_ORDER = ['owner', 'price', 'mortgage', 'zone'];
+    var MODE_ORDER = ['owner', 'price', 'mortgage', 'zone', 'use'];
     var currentMode = 'owner';
     var colorMaps = {};   // colorMaps[모드][구간키] = 색
 
@@ -504,6 +525,7 @@
         legendItemsEl.innerHTML = mode.cats().map(function (c) {
             var n = counts[c.key] || 0;
             if (c.key === 'na' && !n && parcelVectorSource.getFeatures().length) return '';   // 해당 없으면 숨김
+            if (currentMode === 'use' && !n && parcelVectorSource.getFeatures().length) return '';   // 필지가 없는 용도지역은 숨김
             return '<div class="legend-item"><span class="color-dot" style="background-color:' + hexToRgba(c.color, 0.62) + '"></span>' +
                 '<span class="label">' + esc(c.label) + '</span><span class="count">' + n + '</span></div>';
         }).join('');
@@ -570,9 +592,9 @@
     var BBOX_FILTER = 'geomFilter=' + encodeURIComponent('BOX(' + BBOX.join(',') + ')');
     function dongFilter(code) { return 'attrFilter=' + encodeURIComponent('pnu:like:' + code); }
 
-    function buildUrl(page, filterParam) {
+    function buildUrl(page, filterParam, dataName) {
         return 'https://api.vworld.kr/req/data?service=data&version=2.0&request=GetFeature'
-            + '&data=LP_PA_CBND_BUBUN'
+            + '&data=' + (dataName || 'LP_PA_CBND_BUBUN')
             + '&key=' + VWORLD_KEY
             + '&domain=' + encodeURIComponent(DOMAIN)
             + '&' + filterParam
@@ -584,8 +606,8 @@
 
     // 응답이 느린 페이지가 있어 타임아웃을 늘리고 최대 3번 재시도.
     // (일반 fetch는 VWorld가 CORS를 허용하지 않아 배포 환경에서는 쓸 수 없음)
-    function fetchPage(page, filterParam) {
-        var url = buildUrl(page, filterParam);
+    function fetchPage(page, filterParam, dataName) {
+        var url = buildUrl(page, filterParam, dataName);
         var tries = 0;
         function attempt() {
             // 새 시도마다 새 콜백 이름을 쓰므로, 늦게 도착한 이전 응답이 섞이지 않음
@@ -714,6 +736,7 @@
                 console.warn('동 판별 실패. 첫 필지 속성:', ctx.unresolved[0].props);
             }
 
+            assignZoning();  // 용도지역 배정 (도형을 이미 받았다면)
             assignZones();   // 구역에 속한 필지 표시 (renderLegend 포함)
             var total = Object.keys(landDataMap).length;
             var missing = total - Object.keys(ctx.usedKeys).length;
@@ -1061,6 +1084,88 @@
         if (e.key === 'Escape' && zoneDraw) stopZoneDraw();
     });
 
+    /* ---------- 용도지역: VWorld 도형을 받아 필지마다 자동 배정 ---------- */
+    function addZoningFeature(fd) {
+        var g = fd.geometry, name = fd.properties && fd.properties.uname;
+        if (!g || !name) return;
+        var polys = g.type === 'Polygon' ? [g.coordinates] : (g.type === 'MultiPolygon' ? g.coordinates : []);
+        var proj = polys.map(function (rings) {
+            return rings.map(function (ring) { return ring.map(function (p) { return ol.proj.fromLonLat([p[0], p[1]]); }); });
+        });
+        var xs = [], ys = [];
+        proj.forEach(function (rings) { rings[0].forEach(function (p) { xs.push(p[0]); ys.push(p[1]); }); });
+        if (!xs.length) return;
+        zoningPolys.push({
+            name: name, polys: proj,
+            bbox: [Math.min.apply(null, xs), Math.min.apply(null, ys), Math.max.apply(null, xs), Math.max.apply(null, ys)]
+        });
+    }
+
+    // 바깥 링 안에 있고 구멍(안쪽 링) 안에는 없으면 포함
+    function pointInPolygonRings(pt, rings) {
+        if (!pointInRing(pt, rings[0])) return false;
+        for (var i = 1; i < rings.length; i++) if (pointInRing(pt, rings[i])) return false;
+        return true;
+    }
+    function zoningAt(pt) {
+        for (var i = 0; i < zoningPolys.length; i++) {
+            var z = zoningPolys[i], b = z.bbox;
+            if (pt[0] < b[0] || pt[0] > b[2] || pt[1] < b[1] || pt[1] > b[3]) continue;
+            for (var j = 0; j < z.polys.length; j++) if (pointInPolygonRings(pt, z.polys[j])) return z.name;
+        }
+        return null;
+    }
+
+    function buildZoningCats() {
+        var names = [];
+        zoningPolys.forEach(function (z) { if (names.indexOf(z.name) < 0) names.push(z.name); });
+        function rank(n) { var i = ZONING_ORDER.indexOf(n); return i < 0 ? 999 : i; }
+        names.sort(function (a, b) { return rank(a) - rank(b); });
+        var fb = 0;
+        zoningCatList = names.map(function (n) {
+            return { key: n, label: n, color: ZONING_COLORS[n] || ZONING_FALLBACK[fb++ % ZONING_FALLBACK.length] };
+        });
+        rebuildColorMaps();
+    }
+
+    // 필지의 안쪽 점이 들어 있는 용도지역을 필지에 붙임 (필지가 두 용도지역에 걸치면 안쪽 점 기준)
+    function assignZoning() {
+        if (!zoningLoaded) return;
+        parcelVectorSource.getFeatures().forEach(function (f) {
+            var info = f.get('landInfo');
+            if (!info.pt) info.pt = parcelPoint(f.getGeometry());
+            info.cats.use = zoningAt(info.pt) || 'na';
+        });
+        renderLegend();
+        parcelVectorLayer.changed();
+    }
+
+    async function loadZoning() {
+        var page = 1, totalPages = 1;
+        var filter = 'geomFilter=' + encodeURIComponent('BOX(' + ZONING_BOX.join(',') + ')');
+        try {
+            while (page <= totalPages && page <= 20) {
+                var data = await fetchPage(page, filter, ZONING_DATA);
+                var resp = data && data.response;
+                if (!resp || resp.status !== 'OK') {
+                    if (resp && resp.status === 'NOT_FOUND') break;
+                    throw new Error(resp && resp.error ? resp.error.code + ' ' + resp.error.text : '응답 없음');
+                }
+                totalPages = Number(resp.page && resp.page.total) || 1;
+                resp.result.featureCollection.features.forEach(addZoningFeature);
+                page++;
+            }
+            zoningLoaded = true;
+            buildZoningCats();
+            assignZoning();
+            console.log('용도지역 도형 ' + zoningPolys.length + '개 로드:', zoningCatList.map(function (c) { return c.label; }));
+        } catch (err) {
+            console.warn('용도지역 로드 실패:', err.message);
+            setStatus('용도지역 도형을 불러오지 못했어요: ' + err.message);
+        }
+    }
+    loadZoning();
+
     /* ---------- 클릭 팝업 ---------- */
     function row(label, valueHtml, subHtml) {
         return '<div class="popup-row"><b>' + label + '</b><span>' + valueHtml +
@@ -1100,6 +1205,7 @@
         var showNote = it.note && String(it.note).indexOf('공동담보') < 0;   // 공동담보는 건물 근저당 줄에 이미 표시됨
         return '<div class="popup-title">🏢 ' + esc(it.dong || '청량리동') + ' ' + esc(it.jibun || info.jibun || '정보없음') + '</div>' +
             row('소유구분', it.owner ? esc(it.owner) : NA_HTML) +
+            (zoningLoaded ? row('용도지역', info.cats.use && info.cats.use !== 'na' ? esc(info.cats.use) : NA_HTML) : '') +
             (zoneSource.getFeatures().length
                 ? row('재개발 구역', info.cats.zone && info.cats.zone !== 'none' ? '<b>' + esc(ZONE_BY_KEY[info.cats.zone].label) + '</b>' : '<span class="na">구역 밖</span>')
                 : '') +
