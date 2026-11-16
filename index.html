@@ -1178,3 +1178,272 @@
             }
             map.addInteraction(zoneModify);
             if (!currentZone() && zones.length) selectedZoneId = zones[0].id;
+            renderZonePick();
+            fillZoneForm();
+            zoneHintEl.textContent = ZONE_HINTS.idle;
+        } else {
+            stopZoneDraw();
+            if (zoneModify) map.removeInteraction(zoneModify);
+        }
+    }
+    zoneEditBtn.onclick = function () { setEditMode(!editMode); };
+    zoneAddBtn.onclick = function () { if (zoneDraw) stopZoneDraw(); else startZoneDraw('new'); };
+    zoneAddRingBtn.onclick = function () { if (zoneDraw) stopZoneDraw(); else startZoneDraw('ring'); };
+
+    document.getElementById('zone-del').onclick = function () {
+        var z = currentZone();
+        if (!z) return;
+        if (!window.confirm('‘' + (z.name || '이 구역') + '’ 구역을 삭제할까요? (경계와 입력한 정보가 모두 지워져요)')) return;
+        zoneSource.getFeatures().filter(function (f) { return f.get('zone') === z.id; })
+            .forEach(function (f) { zoneSource.removeFeature(f); });
+        zones.splice(zoneIndex(z.id), 1);   // 뒤 구역들의 색이 한 칸씩 당겨짐
+        selectedZoneId = zones.length ? zones[0].id : null;
+        refreshZoneDefs();
+        renderZonePick();
+        fillZoneForm();
+        assignZones();
+        saveDraft();
+    };
+
+    // 현재 정비구역(경계 + 입력한 정보)을 zones.json 으로 내려받기 → 프로젝트 폴더의 zones.json 에 덮어쓰고 GitHub 에 올리면 됨
+    document.getElementById('zone-save').onclick = function () {
+        var text = JSON.stringify(zonesToData());
+        var a = document.createElement('a');
+        a.href = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
+        a.download = 'zones.json';
+        document.body.appendChild(a); a.click(); a.remove();
+        try { navigator.clipboard.writeText(text); } catch (e) { /* 클립보드가 막혀 있어도 파일은 저장됨 */ }
+        clearDraft();
+        setStatus('zones.json 을 내려받았어요 (정비구역 ' + zones.length + '개).\n프로젝트 폴더의 zones.json 에 덮어쓰세요.');
+    };
+
+    document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape' && zoneDraw) stopZoneDraw();
+    });
+
+    // 처음 열 때: 저장하지 않은 편집 내용(초안)이 있으면 그것을, 없으면 zones.json 을 읽음
+    (function () {
+        var draft = readDraft();
+        if (draft) {
+            loadZonesData(draft);
+            setStatus('저장하지 않은 편집 내용(초안)을 불러왔어요.\n‘정비구역 편집’에서 ‘zones.json 저장’을 누르면 초안이 지워져요.');
+            return;
+        }
+        fetch(ZONES_URL)
+            .then(function (res) { if (!res.ok) throw new Error('HTTP ' + res.status); return res.json(); })
+            .then(loadZonesData)
+            .catch(function (err) {
+                console.log('zones.json 없음 또는 읽기 실패:', err.message);
+                renderZoneSummary();
+            });
+    })();
+
+    /* ---------- 용도지역: VWorld 도형을 받아 필지마다 자동 배정 ---------- */
+    function addZoningFeature(fd) {
+        var g = fd.geometry, name = fd.properties && fd.properties.uname;
+        if (!g || !name) return;
+        var polys = g.type === 'Polygon' ? [g.coordinates] : (g.type === 'MultiPolygon' ? g.coordinates : []);
+        var proj = polys.map(function (rings) {
+            return rings.map(function (ring) { return ring.map(function (p) { return ol.proj.fromLonLat([p[0], p[1]]); }); });
+        });
+        var xs = [], ys = [];
+        proj.forEach(function (rings) { rings[0].forEach(function (p) { xs.push(p[0]); ys.push(p[1]); }); });
+        if (!xs.length) return;
+        zoningPolys.push({
+            name: name, polys: proj,
+            bbox: [Math.min.apply(null, xs), Math.min.apply(null, ys), Math.max.apply(null, xs), Math.max.apply(null, ys)]
+        });
+    }
+
+    // 바깥 링 안에 있고 구멍(안쪽 링) 안에는 없으면 포함
+    function pointInPolygonRings(pt, rings) {
+        if (!pointInRing(pt, rings[0])) return false;
+        for (var i = 1; i < rings.length; i++) if (pointInRing(pt, rings[i])) return false;
+        return true;
+    }
+    function zoningAt(pt) {
+        for (var i = 0; i < zoningPolys.length; i++) {
+            var z = zoningPolys[i], b = z.bbox;
+            if (pt[0] < b[0] || pt[0] > b[2] || pt[1] < b[1] || pt[1] > b[3]) continue;
+            for (var j = 0; j < z.polys.length; j++) if (pointInPolygonRings(pt, z.polys[j])) return z.name;
+        }
+        return null;
+    }
+
+    function buildZoningCats() {
+        var names = [];
+        zoningPolys.forEach(function (z) { if (names.indexOf(z.name) < 0) names.push(z.name); });
+        function rank(n) { var i = ZONING_ORDER.indexOf(n); return i < 0 ? 999 : i; }
+        names.sort(function (a, b) { return rank(a) - rank(b); });
+        var fb = 0;
+        zoningCatList = names.map(function (n) {
+            return { key: n, label: n, color: ZONING_COLORS[n] || ZONING_FALLBACK[fb++ % ZONING_FALLBACK.length] };
+        });
+        rebuildColorMaps();
+    }
+
+    // 필지의 안쪽 점이 들어 있는 용도지역을 필지에 붙임 (필지가 두 용도지역에 걸치면 안쪽 점 기준)
+    function assignZoning() {
+        if (!zoningLoaded) return;
+        parcelVectorSource.getFeatures().forEach(function (f) {
+            var info = f.get('landInfo');
+            if (!info.pt) info.pt = parcelPoint(f.getGeometry());
+            info.cats.use = zoningAt(info.pt) || 'na';
+        });
+        renderLegend();
+        parcelVectorLayer.changed();
+    }
+
+    async function loadZoning() {
+        var page = 1, totalPages = 1;
+        var filter = 'geomFilter=' + encodeURIComponent('BOX(' + ZONING_BOX.join(',') + ')');
+        try {
+            while (page <= totalPages && page <= 20) {
+                var data = await fetchPage(page, filter, ZONING_DATA);
+                var resp = data && data.response;
+                if (!resp || resp.status !== 'OK') {
+                    if (resp && resp.status === 'NOT_FOUND') break;
+                    throw new Error(resp && resp.error ? resp.error.code + ' ' + resp.error.text : '응답 없음');
+                }
+                totalPages = Number(resp.page && resp.page.total) || 1;
+                resp.result.featureCollection.features.forEach(addZoningFeature);
+                page++;
+            }
+            zoningLoaded = true;
+            buildZoningCats();
+            assignZoning();
+            console.log('용도지역 도형 ' + zoningPolys.length + '개 로드:', zoningCatList.map(function (c) { return c.label; }));
+        } catch (err) {
+            console.warn('용도지역 로드 실패:', err.message);
+            setStatus('용도지역 도형을 불러오지 못했어요: ' + err.message);
+        }
+    }
+    loadZoning();
+
+    /* ---------- 클릭 팝업 ---------- */
+    function row(label, valueHtml, subHtml) {
+        return '<div class="popup-row"><b>' + label + '</b><span>' + valueHtml +
+            (subHtml ? '<span class="sub">' + subHtml + '</span>' : '') + '</span></div>';
+    }
+    var NA_HTML = '<span class="na">정보 없음</span>';
+
+    function yearHtml(v) {
+        if (v === null) return NA_HTML;
+        var s = String(v).trim();
+        if (s === '건물X') return '건물 없음';
+        if (/^\d{4}$/.test(s)) return esc(s) + '년';
+        return esc(s);   // "2018(지분 이전)" 처럼 설명이 붙은 값은 그대로
+    }
+
+    // kind: 'land' | 'bld'
+    function mortgageHtml(it, kind) {
+        var v = kind === 'land' ? it.landMort : it.bldMort;
+        var n = numOrNull(v);
+        if (n !== null) {
+            if (n === 0) return '없음';
+            return '<b>' + fmtWon(n) + '</b>' + (n >= 1e4 ? '<span class="sub">' + n.toLocaleString() + '원</span>' : '');
+        }
+        if (v !== null) {
+            var s = String(v).trim();
+            if (s === '건물X') return '건물 없음';
+            if (s === '공동담보') return '토지와 공동담보';
+            return esc(s);
+        }
+        // 건물 칸이 비어 있어도 비고에 공동담보라고 적혀 있으면 토지 근저당에 포함된 것
+        if (kind === 'bld' && it.note && String(it.note).indexOf('공동담보') >= 0) return '토지와 공동담보';
+        return NA_HTML;
+    }
+
+    function parcelPopupHtml(info) {
+        var it = info.item;
+        var showNote = it.note && String(it.note).indexOf('공동담보') < 0;   // 공동담보는 건물 근저당 줄에 이미 표시됨
+        return '<div class="popup-title">🏢 ' + esc(it.dong || '청량리동') + ' ' + esc(it.jibun || info.jibun || '정보없음') + '</div>' +
+            row('소유구분', it.owner ? esc(it.owner) : NA_HTML) +
+            (zoningLoaded ? row('용도지역', info.cats.use && info.cats.use !== 'na' ? esc(info.cats.use) : NA_HTML) : '') +
+            (zoneSource.getFeatures().length
+                ? row('정비구역', info.cats.zone && info.cats.zone !== 'none' && ZONE_BY_KEY[info.cats.zone] ? '<b>' + esc(ZONE_BY_KEY[info.cats.zone].label) + '</b>' : '<span class="na">구역 밖</span>')
+                : '') +
+            row('면적', it.area === null ? '-' : fmtNum(it.area) + ' ㎡') +
+            row('공시지가', it.price === null ? '-' : fmtNum(it.price) + ' 원/㎡') +
+            row('총 토지가액', it.total === null ? '-' : fmtWon(it.total), it.total === null ? '' : fmtNum(it.total) + '원') +
+            '<div class="popup-sec">최근 소유주 변경</div>' +
+            row('토지', yearHtml(it.landYear)) +
+            row('건물', yearHtml(it.bldYear)) +
+            '<div class="popup-sec">근저당 설정액</div>' +
+            row('토지', mortgageHtml(it, 'land')) +
+            row('건물', mortgageHtml(it, 'bld')) +
+            (showNote ? '<div class="popup-sec">비고</div><div>' + esc(it.note) + '</div>' : '');
+    }
+
+    // 구역 정보 팝업: 직접 입력한 사업 정보 + 지도에 올라온 구역 내 필지 합계
+    function zonePopupHtml(zoneKey) {
+        var zi = zoneIndex(zoneKey), z = zones[zi], meta = ZONE_BY_KEY[zoneKey];
+        if (!z || !meta) return '<div class="na">구역 정보를 찾을 수 없어요.</div>';
+        var inf = z.info;
+        var zg = {};
+        parcelVectorSource.getFeatures().forEach(function (f) {
+            var info = f.get('landInfo');
+            if (info.cats.zone === zoneKey) addZoneGroup(zg, info);
+        });
+        var g = zg[zoneKey];
+        var stages = String(inf.stages || '').split(/\r?\n/).map(function (t) { return t.trim(); }).filter(Boolean);
+        var html = '<div class="popup-title"><span class="color-dot" style="background-color:' + hexToRgba(meta.color, 0.8) + '"></span>' +
+            esc(meta.label) + '</div>';
+        var any = false;
+        if (stages.length) {
+            any = true;
+            html += '<div class="popup-sec">현재 사업 단계</div><ul class="popup-lines">' +
+                stages.map(function (t) { return '<li>' + esc(t) + '</li>'; }).join('') + '</ul>';
+        }
+        if (inf.move)    { any = true; html += row('입주 예정일', esc(inf.move)); }
+        if (inf.builder) { any = true; html += row(esc(inf.builderLabel || '시공사'), esc(inf.builder)); }
+        if (inf.units)   { any = true; html += row('세대 수', esc(inf.units), inf.unitsSub ? esc(inf.unitsSub) : ''); }
+        if (!any) html += '<div class="na">입력된 사업 정보가 없어요. (정비구역 편집에서 입력)</div>';
+        html += '<div class="popup-sec">구역 안 필지 (지도 데이터)</div>' +
+            (g
+                ? row('필지 수', g.n.toLocaleString() + '개') +
+                  row('토지가액 합', fmtSum(g.value)) +
+                  row('근저당 합', g.mortN === 0 ? '<span class="na">미입력</span>' : fmtSum(g.mort), g.mortN === 0 ? '' : '입력 ' + g.mortN + '/' + g.n + '필지')
+                : '<div class="na">표시된 필지가 없어요.</div>');
+        return html;
+    }
+
+    function showPopup(html, coordinate) {
+        content.innerHTML = html;
+        overlay.setPosition(coordinate);
+    }
+
+    map.on('singleclick', function (evt) {
+        if (activeTool || editMode || Date.now() < suppressClickUntil) return;   // 범위를 그리는 중에는 팝업을 열지 않음
+        var zoneF = map.forEachFeatureAtPixel(evt.pixel, function (f) { return f; }, {
+            layerFilter: function (l) { return l === zoneLayer; }
+        });
+        var parcelF = map.forEachFeatureAtPixel(evt.pixel, function (f) { return f; }, {
+            layerFilter: function (l) { return l === parcelVectorLayer; }
+        });
+        var info = parcelF && parcelF.get('landInfo');
+
+        // 정비구역 안을 클릭하면 구역 정보를 먼저 보여주고, 버튼으로 그 자리의 필지 정보로 넘어감
+        if (zoneF) {
+            var zoneKey = zoneF.get('zone'), coord = evt.coordinate;
+            var showZone = function () {
+                showPopup(zonePopupHtml(zoneKey) +
+                    (info ? '<button type="button" class="popup-btn" id="popup-switch">이 자리의 필지 정보 보기</button>' : ''), coord);
+                var sw = document.getElementById('popup-switch');
+                if (sw) sw.onclick = showParcel;
+            };
+            var showParcel = function () {
+                showPopup(parcelPopupHtml(info) + '<button type="button" class="popup-btn" id="popup-switch">← 구역 정보로 돌아가기</button>', coord);
+                document.getElementById('popup-switch').onclick = showZone;
+            };
+            showZone();
+            return;
+        }
+
+        if (!info) { overlay.setPosition(undefined); return; }
+        showPopup(parcelPopupHtml(info), evt.coordinate);
+    });
+</script>
+
+</body>
+</html>
