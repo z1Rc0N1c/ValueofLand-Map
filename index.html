@@ -49,7 +49,7 @@
 
         /* 범위 지정 + 통계 */
         #stats {
-            position: absolute; top: 84px; left: 12px; width: 350px; max-width: calc(100% - 24px);
+            position: absolute; top: 84px; left: 12px; width: 400px; max-width: calc(100% - 24px);
             max-height: calc(100vh - 190px); overflow-y: auto; box-sizing: border-box;
             background: rgba(255,255,255,0.96); padding: 10px 12px; border-radius: 8px;
             box-shadow: 0 2px 8px rgba(0,0,0,0.2); font-size: 12px; z-index: 1000;
@@ -819,7 +819,7 @@
     function computeStats(areaGeom) {
         var ring = areaGeom.getCoordinates()[0];
         var groups = {}, zg = {};
-        var tot = { n: 0, value: 0, mort: 0, mortN: 0 };
+        var tot = { n: 0, value: 0, mort: 0, mortN: 0, area: 0 };
 
         parcelVectorSource.getFeatures().forEach(function (f) {
             var info = f.get('landInfo');
@@ -828,16 +828,25 @@
             if (!info.sel) return;
 
             var it = info.item, name = it.owner || '(소유주 미상)';
-            var g = groups[name] || (groups[name] = { owner: name, cat: info.cats.owner, n: 0, value: 0, mort: 0, mortN: 0 });
+            var g = groups[name] || (groups[name] = { owner: name, cat: info.cats.owner, n: 0, value: 0, mort: 0, mortN: 0, area: 0 });
             var m = mortgageTotal(it);
             g.n++; tot.n++;
             g.value += it.total || 0; tot.value += it.total || 0;
+            g.area += it.area || 0; tot.area += it.area || 0;
             if (m !== null) { g.mort += m; g.mortN++; tot.mort += m; tot.mortN++; }
             addZoneGroup(zg, info);
         });
 
         parcelVectorLayer.changed();   // 선택된 필지 강조를 다시 그림
         renderStats(groups, tot, zg);
+    }
+
+    // 면적 합 (㎡, 소수 첫째 자리까지) + 평
+    function fmtArea(v) {
+        return v.toLocaleString(undefined, { maximumFractionDigits: 1 }) + '㎡';
+    }
+    function fmtPyeong(v) {
+        return (v / 3.3058).toLocaleString(undefined, { maximumFractionDigits: 0 }) + '평';
     }
 
     function mortCell(mort, mortN, n) {
@@ -847,20 +856,20 @@
 
     function addZoneGroup(zg, info) {
         var k = info.cats.zone || 'none';
-        var g = zg[k] || (zg[k] = { n: 0, value: 0, mort: 0, mortN: 0 });
+        var g = zg[k] || (zg[k] = { n: 0, value: 0, mort: 0, mortN: 0, area: 0 });
         var m = mortgageTotal(info.item);
-        g.n++; g.value += info.item.total || 0;
+        g.n++; g.value += info.item.total || 0; g.area += info.item.area || 0;
         if (m !== null) { g.mort += m; g.mortN++; }
     }
 
     // 구역별 표. showEmpty: 필지가 0개인 구역도 보여줌
     function zoneTableHtml(zg, showEmpty) {
         var rows = ZONE_CATS.filter(function (z) { return zg[z.key] || (showEmpty && z.key !== 'none'); });
-        return '<table class="stats-table"><thead><tr><th>구역</th><th>필지</th><th>토지가액 합</th><th>근저당 합</th></tr></thead><tbody>' +
+        return '<table class="stats-table"><thead><tr><th>구역</th><th>필지</th><th>면적 합</th><th>토지가액 합</th><th>근저당 합</th></tr></thead><tbody>' +
             rows.map(function (z) {
-                var g = zg[z.key] || { n: 0, value: 0, mort: 0, mortN: 0 };
+                var g = zg[z.key] || { n: 0, value: 0, mort: 0, mortN: 0, area: 0 };
                 return '<tr><td><span class="color-dot" style="background-color:' + hexToRgba(z.color, 0.62) + '"></span>' + esc(z.label) + '</td>' +
-                    '<td>' + g.n.toLocaleString() + '</td><td>' + (g.n ? fmtSum(g.value) : '-') + '</td><td>' +
+                    '<td>' + g.n.toLocaleString() + '</td><td>' + (g.n ? fmtArea(g.area) : '-') + '</td><td>' + (g.n ? fmtSum(g.value) : '-') + '</td><td>' +
                     (g.n ? mortCell(g.mort, g.mortN, g.n) : '-') + '</td></tr>';
             }).join('') + '</tbody></table>';
     }
@@ -886,18 +895,18 @@
             .sort(function (a, b) { return b.n - a.n; });
 
         statsBodyEl.innerHTML =
-            '<div class="stats-total">범위 안 필지 <b>' + tot.n.toLocaleString() + '</b>개</div>' +
-            '<table class="stats-table"><thead><tr><th>소유주</th><th>필지</th><th>토지가액 합</th><th>근저당 합</th></tr></thead><tbody>' +
+            '<div class="stats-total">범위 안 필지 <b>' + tot.n.toLocaleString() + '</b>개 · 면적 합 <b>' + fmtArea(tot.area) + '</b> <span class="na">(' + fmtPyeong(tot.area) + ')</span></div>' +
+            '<table class="stats-table"><thead><tr><th>소유주</th><th>필지</th><th>면적 합</th><th>토지가액 합</th><th>근저당 합</th></tr></thead><tbody>' +
             rows.map(function (g) {
                 var color = colorMaps.owner[g.cat] || NA_CAT.color;
                 return '<tr><td><span class="color-dot" style="background-color:' + hexToRgba(color, 0.62) + '"></span>' + esc(g.owner) + '</td>' +
-                    '<td>' + g.n.toLocaleString() + '</td><td>' + fmtSum(g.value) + '</td><td>' + mortCell(g.mort, g.mortN, g.n) + '</td></tr>';
+                    '<td>' + g.n.toLocaleString() + '</td><td>' + fmtArea(g.area) + '</td><td>' + fmtSum(g.value) + '</td><td>' + mortCell(g.mort, g.mortN, g.n) + '</td></tr>';
             }).join('') +
-            '</tbody><tfoot><tr><td>합계</td><td>' + tot.n.toLocaleString() + '</td><td>' + fmtSum(tot.value) + '</td><td>' +
+            '</tbody><tfoot><tr><td>합계</td><td>' + tot.n.toLocaleString() + '</td><td>' + fmtArea(tot.area) + '</td><td>' + fmtSum(tot.value) + '</td><td>' +
             mortCell(tot.mort, tot.mortN, tot.n) + '</td></tr></tfoot></table>' +
             (zg && Object.keys(zg).some(function (k) { return k !== 'none'; })
                 ? '<div class="popup-sec">정비구역별</div>' + zoneTableHtml(zg, false) : '') +
-            '<div class="stats-note">토지가액 = 공시지가 × 면적. 근저당은 엑셀에 입력된 필지만 합산하고(토지+건물, 공동담보는 중복 제외), ' +
+            '<div class="stats-note">면적은 엑셀의 면적(㎡) 값을 합한 것이고(1평 = 3.3058㎡), 토지가액 = 공시지가 × 면적이에요. 근저당은 엑셀에 입력된 필지만 합산하고(토지+건물, 공동담보는 중복 제외), ' +
             '필지의 안쪽 점이 범위 안에 있으면 포함해요.</div>';
     }
 
